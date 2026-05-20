@@ -7,14 +7,17 @@ Developers reach for `docker pull`. It is fast, it works, and the security quest
 
 SUSE Rancher Developer Access bridges this gap. It brings Kubernetes and trusted content directly into the developer's local environment, with minimal cognitive overhead. The local cluster is powered by Rancher Desktop and its K3s engine, a lightweight, production-grade Kubernetes distribution that also serves as the embedded engine in RKE2. From the first line of code, local development runs on the same runtime and the same content as production.
 
+[#_1_subscription_activation]
 == 1. Subscription Activation
 
 Activation of your SUSE Rancher Developer Access subscription is required before you can access the trusted OCI registry at dp.apps.rancher.io.
 
+[#_1_1_activating_your_subscription]
 === 1.1. Activating Your Subscription
 
 After purchasing a subscription or starting a free trial, your primary contact will receive a fulfillment email containing a 14-character Registration Code.
 
+[#_procedure_activating_your_access]
 ==== Procedure: Activating your access
 
 . Log in to the https://scc.suse.com/[SUSE Customer Center].
@@ -23,6 +26,7 @@ After purchasing a subscription or starting a free trial, your primary contact w
 . Associate the subscription with your organization and click *Activate*.
 . Once complete, verify that *SUSE Rancher Developer Access* appears as active under the *Subscriptions* tab.
 
+[#_1_2_user_accounts_and_access_tokens]
 === 1.2. User Accounts and Access Tokens
 
 SUSE Rancher Developer Access is assigned to individual User Accounts.
@@ -31,16 +35,19 @@ SUSE Rancher Developer Access is assigned to individual User Accounts.
 * *Access Tokens*: Authentication to the registry is handled via Access Tokens. You can create multiple tokens for different environments (for example, a local workstation and a remote development environment), but all tokens link back to your single authorized User Account.
 * *Service Accounts*: This subscription tier does not include Service Accounts, which are required for automated tools such as CI/CD pipelines. If your workflow requires automation, contact SUSE for Rancher Prime details.
 
+[#_procedure_generating_a_token]
 ==== Procedure: Generating a token
 
 . Log in to `apps.rancher.io` using your SCC credentials.
 . Navigate to the *Access Tokens* section of your profile.
 . Click *Create*, provide a description, and copy the token immediately. It will not be displayed again.
 
+[#_2_local_environment_rancher_desktop]
 == 2. Local Environment: Rancher Desktop
 
 Rancher Desktop provides a local Kubernetes cluster and container engine. It is an independent application, and the one this guide uses to run trusted content from SUSE Rancher Developer Access.
 
+[#_2_1_container_engine_selection]
 === 2.1. Container Engine Selection
 
 During setup, you must select a container engine. Regardless of your choice, the behavior of your applications and the Kubernetes cluster remains identical, making both options a solid foundation for production parity. K3s, the engine powering the local cluster, is a lightweight production-grade Kubernetes distribution and the embedded engine at the core of RKE2. The cluster you run locally behaves the same as any containerd-based Kubernetes distribution in production.
@@ -50,10 +57,12 @@ The choice of container engine affects how you interact with the local environme
 * *Moby (Docker Engine)*: This is the suggested choice for most developers. It offers maximum compatibility with popular third-party tools such as Tilt, Dev Containers, and Testcontainers.
 * *containerd (nerdctl)*: This option is intended for users who wish to interact with the local cluster using the same patterns as a cluster administrator, using the nerdctl CLI.
 
+[#_3_the_suse_application_collection_ui_extension_for_rancher_desktop]
 == 3. The SUSE Application Collection UI Extension for Rancher Desktop
 
 The *SUSE Application Collection UI extension for Rancher Desktop* automates registry authentication, creates the required Kubernetes pull secret, and provides a graphical interface to browse, install, and configure applications from the SUSE Application Collection.^[1]^
 
+[#_3_1_installing_and_configuring_the_extension]
 === 3.1. Installing and Configuring the Extension
 
 . Install the extension via the Extensions tab in Rancher Desktop.
@@ -76,18 +85,22 @@ The UI extension currently provides an interface for applications available as H
 
 [^1]: The extension is also compatible with Docker Desktop.
 
+[#_4_why_trusted_content_matters]
 == 4. Why Trusted Content Matters
 
 Public container images are not maintained with CVE exposure as a priority. Using the SUSE Application Collection instead can reduce the aggregate vulnerability count of a full-stack project from several thousand to fewer than 50.
 
+[#_4_1_language_stacks_and_base_images]
 === 4.1. Language Stacks and Base Images
 
 Unvetted language or base containers can introduce thousands of vulnerabilities into your project before you have written a single line of code. Popular images from public registries are built for convenience, not for security. They are not systematically maintained to minimize CVE exposure. SUSE Application Collection language stacks are built on SLE BCI, a minimal base layer that SUSE actively maintains and patches. Inherited vulnerabilities are reduced significantly across all supported runtimes, including Node.js, Go, OpenJDK, and many others.
 4.2. Applications and Middleware
 The same applies to the applications your stack depends on. A widely-used middleware image from a public registry can easily carry hundreds of CVEs, not because the software itself is insecure, but because the image is built on a broad base layer and rarely maintained to track dependency updates. SUSE Application Collection images use minimal, curated dependencies and are actively patched — a different approach to image composition, not deferred patching — which consistently brings the vulnerability count down to a fraction of what public counterparts carry.
 
+[#_5_example_developer_workflow_fast_iteration_inner_loop]
 == 5. Example Developer Workflow: Fast Iteration Inner Loop
 
+[#_5_1_live_development_with_tilt_and_vs_code]
 === 5.1. Live Development with Tilt and VS Code
 
 This section walks through a pattern based on *Tilt* and *VS Code*, two popular third-party tools, as one practical example among many.
@@ -100,8 +113,10 @@ Stateful applications fit this pattern well. Dependencies such as PostgreSQL or 
 
 For a complete setup guide and a working reference implementation, refer to the https://github.com/fxHouard/Rancher-Developer-Access-Demo[Rancher Developer Access Demo repository].
 
+[#_6_best_practices_and_tips]
 == 6. Best Practices and Tips
 
+[#_6_1_pin_versions_and_use_trusted_base_images]
 === 6.1. Pin Versions and Use Trusted Base Images
 
 The SUSE Application Collection does not support the `:latest` tag. Always pin your `Dockerfile` and Helm charts to the specific version and revision tags found on https://apps.rancher.io/[apps.rancher.io]. This ensures your environment remains reproducible and eliminates version drift between development and production.
@@ -113,6 +128,7 @@ Always use base images from the trusted registry:
 FROM dp.apps.rancher.io/containers/suse-bci-base:15.7
 ----
 
+[#_6_2_tips_for_developers_new_to_kubernetes]
 === 6.2. Tips for Developers New to Kubernetes
 
 Kubernetes introduces concepts that have no direct equivalent in a Docker-only workflow. A few adjustments make the transition easier:
@@ -122,6 +138,7 @@ Kubernetes introduces concepts that have no direct equivalent in a Docker-only w
 * *Logs and state*: Use `kubectl logs <pod>` and `kubectl describe pod <pod>` as your first diagnostic tools. Most issues during local development (image pull failures, crashloops, misconfigured environment variables) are immediately visible there.
 * *Context awareness*: Rancher Desktop registers itself as a kubectl context. If you work with multiple clusters, verify your active context with `kubectl config current-context` before running commands.
 
+[#_conclusion]
 == Conclusion
 
 SUSE Rancher Developer Access gives development teams the same runtime and the same trusted content that will run in production, available from the first day of a project. By automating registry authentication and pre-configuring the local environment, it removes the friction that typically accumulates between development and deployment, without requiring developers to become Kubernetes experts.

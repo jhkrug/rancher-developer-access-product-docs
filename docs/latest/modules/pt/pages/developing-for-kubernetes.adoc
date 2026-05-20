@@ -1,0 +1,1451 @@
+= Desenvolvendo para Kubernetes
+:page-languages: [pt-br]
+:revdate: 2026-03-09
+:page-revdate: {revdate}
+
+*Rancher Desktop – Coleção de Aplicativos SUSE – Tilt*
+
+_Do ambiente de desenvolvimento à implantação – Inner Loop, Observabilidade, GitOps_
+
+[#_1_overview_why_this_guide]
+== 1. Visão geral: por que este guia?
+
+Este guia abrange a *cadeia de valor completa* do desenvolvimento em Kubernetes, desde a configuração inicial do ambiente até a implantação contínua. O objetivo: permitir que um desenvolvedor seja produtivo rapidamente usando ferramentas populares, um cluster local (Rancher Desktop) e imagens confiáveis (Coleção de Aplicativos SUSE).
+
+Está estruturado em duas partes: primeiro, uma *demonstração prática* que faz você começar em minutos. Depois, uma seção *Avançando* que cobre o ecossistema mais amplo (Dev Containers, Testcontainers, mirrord, Helm, segurança, GitOps) para quando você estiver pronto para aprofundar seu fluxo de trabalho.
+
+[#_1_1_the_two_loops_of_cloud_native_development]
+=== 1.1 Os dois loops do desenvolvimento nativo da nuvem
+
+|===
+| | Inner Loop | Outer Loop
+
+| *What*
+| O ciclo diário rápido do desenvolvedor: escrever código, compilar, implantar localmente, testar, depurar, iterar
+| O ciclo automatizado pós-commit: CI/CD, testes de integração, varreduras de segurança, implantação em staging/prod
+
+| *Meta*
+| Feedback em *segundos*
+| Qualidade e reprodutibilidade
+
+| *gerenciamento*
+| Tilt, mirrord
+| Argo CD, GitHub Actions, Tekton
+
+| *Escopo*
+| Estação de trabalho do desenvolvedor + cluster local
+| pipeline CI/CD + cluster remoto
+|===
+
+[quote]
+____
+*Princípio chave* – O loop interno deve ser o mais rápido possível. Cada segundo economizado no ciclo de código-construção-implantação-teste se multiplica pelo número de mudanças diárias. Um bom loop interno significa passar de 5-10 minutos para 5-10 segundos por iteração.
+____
+
+[#_2_overall_architecture]
+== 2. Arquitetura geral
+
+[#_2_1_diagram]
+=== 2.1 Diagrama
+
+.Arquitetura do Loop Interno e do Loop Externo – mesmas fundações confiáveis da SUSE em ambos os lados
+image::inner-outer-loop.png[Arquitetura do Loop Interno e do Loop Externo – mesmas fundações confiáveis da SUSE em ambos os lados]
+
+[#_2_2_stack_layers]
+=== 2.2 Camadas de stack
+
+|===
+| aplicativos | Ferramenta | Função
+
+| IDE
+| VS Code + extensões
+| Editor, depurar, terminais integrados
+
+| Cluster local
+| Rancher Desktop (k3s)
+| Kubernetes local + tempo de execução do contêiner
+
+| Imagens
+| SUSE Coleção de Aplicativos
+| Imagens base, linguagens, middleware, ferramentas
+
+| Loop interno
+| Tilt
+| Auto-construção, auto-implantação, recarregamento a quente
+
+| Autenticação
+| Keycloak
+| Provedor de identidade OAuth2 / OpenID Connect
+
+| Observabilidade
+| Prometheus + Grafana
+| Métricas de aplicativo, painéis em tempo real
+
+| Pacote
+| Helm / Kustomize
+| Modelagem de manifestos K8s
+
+| Segurança
+| Trivy / Cosign
+| Escaneamento de vulnerabilidades, assinatura de imagens
+
+| GitOps
+| Argo CD
+| Implantação declarativa a partir do Git
+|===
+
+[#_3_setting_up_rancher_desktop]
+== 3. Configurando o Rancher Desktop
+
+[#_3_1_what_is_rancher_desktop]
+=== 3.1 O que é o Rancher Desktop?
+
+O Rancher Desktop é um aplicativo de desktop de código aberto que fornece um *cluster Kubernetes local* (k3s) e um *tempo de execução do contêiner* (dockerd ou containerd), tudo dentro de uma VM gerenciada automaticamente. Não é necessário instalar o Docker Desktop.
+
+[#_3_2_installation_and_configuration]
+=== 3.2 Instalação e configuração
+
+. *Baixe* de https://rancherdesktop.io[rancherdesktop.io].
+. *Escolha o tempo de execução:* selecione *dockerd (moby)* (não containerd). Isso é essencial para o que segue.
+. *Ativar Kubernetes* (ativado por padrão).
+. *Verificar:*
++
+[,bash]
+----
+docker info          # shows "Server Version: ..."
+kubectl get nodes    # shows "Ready"
+----
+. *PATH* – no macOS, verifique se `~/.rd/bin/` está no seu `$PATH` (adicionado automaticamente pelo instalador):
++
+[,bash]
+----
+which docker kubectl helm   # should point to ~/.rd/bin/
+----
+
+[quote]
+____
+*O Rancher Desktop não é o Docker Desktop.* Você não precisa do Docker Desktop. O Rancher Desktop fornece seu próprio daemon Docker (moby/dockerd). Ter ambos instalados pode criar conflitos de socket. Desative o Docker Desktop se você o tiver.
+____
+
+[#_3_3_why_dockerd_moby_when_production_runs_containerd]
+=== 3.3 Por que dockerd (moby) quando a produção utiliza containerd?
+
+Na produção, o Kubernetes usa *containerd* como tempo de execução do contêiner. Aqui está a chave: *o Rancher Desktop também faz isso, mesmo no modo moby.* O cluster k3s sempre roda no containerd, independentemente da configuração. Escolher "`dockerd (moby)`" não substitui o containerd – ele adiciona o daemon do Docker ao lado dele, e os dois compartilham o mesmo repositório de imagens.
+
+Isso nos dá o melhor dos dois mundos: o mesmo tempo de execução do contêiner da produção, além das ferramentas amigáveis para desenvolvedores do Docker.
+
+----
+Rancher Desktop VM (moby mode):
++---------------------------------------------+
+|                                             |
+|   dockerd (moby)         k3s (containerd)   |
+|   +-- image store <----> image store --+    |
+|       (shared)           (same!)       |    |
+|                                             |
+|   docker build -> image appears in both     |
+|   NO PUSH NEEDED!                           |
++---------------------------------------------+
+
+Rancher Desktop VM (containerd mode):
++---------------------------------------------+
+|                                             |
+|   nerdctl (containerd)   k3s (containerd)   |
+|   +-- image store        image store --+    |
+|       (separate!)        (separate!)   |    |
+|                                             |
+|   nerdctl build -> push -> pull -> k3s      |
+|   3 steps instead of 1 = slower             |
++---------------------------------------------+
+----
+
+Imagens construídas pelo Docker são *imediatamente visíveis* para o k3s porque compartilham o mesmo repositório. Sem registro, sem push, sem pull. Isso é o que torna o loop interno tão rápido.
+
+[quote]
+____
+*Sem compromisso com a paridade.* Seu aplicativo roda no containerd em ambos os casos. A única diferença é a CLI usada para construir imagens: `docker` (modo moby) vs `nerdctl` (modo containerd). Em tempo de execução, o k3s se comporta de forma idêntica.
+____
+
+Isso também é o motivo pelo qual as implantações de demonstração do K8s usam `imagePullPolicy: IfNotPresent` (ou `Never`): dizemos ao k3s "`use the local image, do not look in a registry`".
+
+[#_4_suse_application_collection]
+== 4. SUSE Coleção de Aplicativos
+
+[#_4_1_what_is_suse_application_collection]
+=== 4.1 O que é a Coleção de Aplicativos SUSE?
+
+*A Coleção de Aplicativos SUSE* é uma coleção de aplicativos na forma de imagens de contêiner e gráficos Helm, construídos, empacotados, endurecidos e mantidos pela SUSE – com builds de grau SLSA L3 e todos os metadados necessários para manter as operações serenas. É a fonte confiável para construir aplicativos no Kubernetes.
+
+O registro é `dp.apps.rancher.io`. Você encontrará:
+
+* *Imagens base (BCI)* – SUSE Linux Enterprise Base Container Images: fundações mínimas e seguras.
+* *Imagens de linguagem* – Node.js, Go, Rust, Java, Ruby, Clojure… com toolchains completos.
+* *Middleware* – PostgreSQL, Redis, Kafka, MariaDB, Nats, NGINX, Apache ActiveMQ, Apache Apisix, Apache Tomcat…
+* *Ferramentas* – Helm, Trivy, Cosign, kubectl, ArgoCD, Prometheus, Grafana…
+
+Disponível na forma de contêineres únicos ou, quando relevante, aplicações completas com helm-charts para implantação.
+
+A *extensão SUSE Application Collection* no Rancher Desktop adiciona uma aba dedicada na interface. Você navega pelo catálogo, configura valores e instala com um clique – a complexidade do Helm é oculta.
+
+[#_4_2_why_application_collection_over_public_registries]
+=== 4.2 Por que Application Collection em vez de registros públicos?
+
+|===
+| | Registros públicos | SUSE Coleção de Aplicativos
+
+| *Manutenção*
+| Comunidade, variável
+| SUSE, SLA empresarial
+
+| *SO Base*
+| Alpine, Debian, Ubuntu…
+| SLE BCI (SUSE Linux Enterprise)
+
+| *Patches de segurança*
+| Quando o mantenedor desejar
+| Rastreamento contínuo de CVE pela SUSE
+
+| *Assinar*
+| Opcional
+| Cosign incorporado
+
+| *Cadeia de suprimento*
+| Variável
+| SBOM, proveniência, atestações, SLSA L3
+|===
+
+[#_4_3_authentication]
+=== 4.3 Autenticação
+
+A autenticação no registro da Coleção de Aplicativos SUSE é configurada automaticamente pela extensão da Coleção de Aplicativos no Rancher Desktop.
+
+*Verifique se funciona:*
+
+[,bash]
+----
+docker pull dp.apps.rancher.io/containers/bci-base:latest
+----
+
+*Se a autenticação não estiver configurada*, adicione manualmente:
+
+[,bash]
+----
+# Log in to the registry (SUSE Customer Center credentials)
+docker login dp.apps.rancher.io
+
+# Verify
+docker pull dp.apps.rancher.io/containers/bci-base:latest
+----
+
+*Para Kubernetes (instalação do helm, pods)* – um segredo de pull é necessário se as imagens não forem puxadas previamente. O Rancher Desktop lida com isso automaticamente através da extensão. Se houver um problema:
+
+[,bash]
+----
+kubectl create secret docker-registry application-collection \
+  --docker-server=dp.apps.rancher.io \
+  --docker-username=<USERNAME> \
+  --docker-password=<PASSWORD>
+----
+
+Então adicione `imagePullSecrets: [{name: application-collection}]` nos seus valores do Helm.
+
+[#_5_installing_tilt]
+== 5. Instalando o Tilt
+
+*Tilt* é uma ferramenta de código aberto que automatiza cada etapa do loop interno, desde a alteração do código até a nova implantação. Ele monitora seus arquivos, reconstrói imagens, atualiza o cluster e exibe tudo em um painel em tempo real. Veja https://tilt.dev[tilt.dev].
+
+[#_5_1_macos]
+=== 5.1 macOS
+
+[,bash]
+----
+brew install tilt
+----
+
+[#_5_2_linux_suse_and_others]
+=== 5.2 Linux (SUSE e outros)
+
+[,bash]
+----
+curl -fsSL https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.sh | bash
+----
+
+O script detecta sua arquitetura e coloca o binário no seu `$PATH` (`~/.local/bin`, `/usr/local/bin` ou `~/bin`). Verificar:
+
+[,bash]
+----
+tilt version
+----
+
+[#_5_3_windows]
+=== 5.3 Windows
+
+No PowerShell:
+
+[,powershell]
+----
+iex ((new-object net.webclient).DownloadString('https://raw.githubusercontent.com/tilt-dev/tilt/master/scripts/install.ps1'))
+----
+
+Se você tiver https://scoop.sh[Scoop] instalado, o script o usará automaticamente. Caso contrário, você pode precisar adicionar o diretório de instalação ao seu `$PATH`. Verificar:
+
+[,powershell]
+----
+tilt version
+----
+
+[#_5_4_tilt_rancher_desktop]
+=== 5.4 Tilt + Rancher Desktop
+
+Tilt é executado *no host* (não dentro de um contêiner) e usa diretamente os CLIs instalados pelo Rancher Desktop: `docker`, `kubectl`, `helm`. Ele detecta automaticamente o Rancher Desktop (desde a versão Tilt v0.25.1+) quando o tempo de execução é dockerd. Ele então sabe que as imagens construídas localmente estão diretamente disponíveis no cluster, e *pula o push*.
+
+Se o Tilt não detectar automaticamente seu cluster, adicione esta linha no topo do Tiltfile:
+
+[,python]
+----
+allow_k8s_contexts('rancher-desktop')
+----
+
+[#_6_the_demo_message_wall_with_observability]
+== 6. A demonstração: Parede de Mensagens com observabilidade
+
+Esta seção apresenta a demonstração completa. Ela mostra o fluxo de trabalho do loop interno: uma aplicação Node.js "`message wall`" conectada ao PostgreSQL, com Keycloak para autenticação, instrumentada com Prometheus e visualizada no Grafana. Tudo é instalado a partir do SUSE Application Collection.
+
+O código-fonte completo está disponível no GitHub: https://github.com/fxHouard/Rancher-Developer-Access-Demo[fxHouard/Rancher-Developer-Access-Demo].
+
+[#_6_1_project_structure]
+=== 6.1 Estrutura do projeto
+
+----
+Rancher-Developer-Access-Demo/
++-- src/
+|   +-- server.js               Application (API + UI + Prometheus metrics)
++-- k8s/
+|   +-- appco/
+|   |   +-- deployment.yaml     Pod spec with Prometheus annotations
+|   |   +-- service.yaml        ClusterIP service
+|   |   +-- keycloak.yaml       Keycloak Deployment + Service (Application Collection image)
+|   +-- shared/
+|       +-- grafana-dashboard.yaml   8-panel dashboard (auto-provisioned via sidecar)
+|       +-- keycloak-realm.json      Realm config (demo user + OAuth client)
++-- scripts/
+|   +-- setup-keycloak-realm.sh      Keycloak realm import via Admin REST API
++-- values_yaml/
+|   +-- postgresql.yaml          Helm values for PostgreSQL
+|   +-- prometheus.yaml          Helm values for Prometheus
+|   +-- grafana.yaml             Helm values for Grafana
++-- Dockerfile                   Container image (Application Collection base)
++-- Tiltfile                     Inner loop config (build, deploy, sync, monitoring)
++-- package.json
+----
+
+[#_6_2_the_package_json]
+=== 6.2 O package.json
+
+[,json]
+----
+{
+  "name": "message-wall",
+  "version": "1.0.0",
+  "description": "SUSE Rancher Developer Access + Tilt: Demo",
+  "main": "src/server.js",
+  "scripts": {
+    "start": "node src/server.js"
+  },
+  "dependencies": {
+    "pg": "^8.13.0",
+    "prom-client": "^15.1.0"
+  }
+}
+----
+
+Apenas duas dependências: `pg` para PostgreSQL e `prom-client` para expor métricas do Prometheus.
+
+[#_6_3_the_application_src_server_js]
+=== 6.3 A aplicação (src/server.js)
+
+A aplicação é uma parede de mensagens interativa com uma interface web incorporada. Ela expõe métricas do Prometheus para observabilidade. Aqui estão as partes principais – o arquivo completo está no repositório.
+
+*Configuração e métricas do Prometheus:*
+
+[,javascript]
+----
+const http = require('http');
+const { Client } = require('pg');
+const promClient = require('prom-client');
+
+const PORT = 3000;
+
+// Change this color, save, see it update!
+const ACCENT_COLOR = "#747dcd";
+
+// --- Prometheus metrics ---
+// collectDefaultMetrics() automatically exposes Node.js
+// metrics: CPU, heap memory, event loop lag, GC...
+promClient.collectDefaultMetrics();
+
+// Custom metrics -- prefixed "app_" for easy discovery
+const httpDuration = new promClient.Histogram({
+  name: 'app_http_request_duration_seconds',
+  help: 'Duration of HTTP requests in seconds',
+  labelNames: ['method', 'path', 'status'],
+  buckets: [0.005, 0.01, 0.05, 0.1, 0.5, 1],
+});
+
+const messagesPosted = new promClient.Counter({
+  name: 'app_messages_posted_total',
+  help: 'Total number of messages posted',
+});
+
+const messagesDeleted = new promClient.Counter({
+  name: 'app_messages_deleted_total',
+  help: 'Total number of bulk deletes',
+});
+
+const messagesCurrent = new promClient.Gauge({
+  name: 'app_messages_count',
+  help: 'Current number of messages in the database',
+});
+----
+
+[quote]
+____
+*Por que o prefixo `app_`?* – O Prometheus coleta centenas de métricas (Node.js, k8s, sistema…). O prefixo `app_` permite que você encontre instantaneamente as métricas da sua aplicação: digite `app_` no Grafana e a autocompletação faz o resto.
+____
+
+*Tipos de métricas do Prometheus:*
+|===
+| Tipo | Uso | Exemplo de demonstração
+
+| *Contador*
+| Valor que só aumenta
+| `app_messages_posted_total` – total de mensagens postadas
+
+| *Medidor*
+| Valor que sobe e desce
+| `app_messages_count` – mensagens atuais no banco de dados
+
+| *Histograma*
+| Distribuição de valores (latência)
+| `app_http_request_duration_seconds` – tempo de resposta por rota
+|===
+
+*Rotas da API:*
+
+A aplicação expõe 6 rotas: `GET /` serve a página HTML, `GET /api/messages` lista as 50 mensagens mais recentes, `POST /api/messages` cria uma mensagem (limite de 280 caracteres), `DELETE /api/messages` deleta todas as mensagens, `GET /health` serve como a verificação do K8s (liveness + readiness), e `GET /metrics` expõe métricas do Prometheus em formato de texto.
+
+*O endpoint `/metrics`:*
+
+[,javascript]
+----
+if (req.method === 'GET' && req.url === '/metrics') {
+  const metrics = await promClient.register.metrics();
+  res.writeHead(200, { 'Content-Type': promClient.register.contentType });
+  res.end(metrics);
+  // Do not record /metrics in the histogram (noise)
+  return;
+}
+----
+
+Este é o endpoint que o Prometheus coleta periodicamente. Ele retorna todas as métricas no formato de texto OpenMetrics. Observe que `/metrics` em si não é medido pelo histograma – isso seria ruído.
+
+*O middleware de medição:*
+
+Cada requisição HTTP é automaticamente cronometrada:
+
+[,javascript]
+----
+const end = httpDuration.startTimer();
+// ... request processing ...
+end({ method: req.method, path: routePath, status: statusCode });
+----
+
+O histograma registra a duração, método, caminho e código de retorno. O Grafana pode então calcular percentis (p50, p95, p99) por rota.
+
+*A página HTML:*
+
+A aplicação serve uma parede de mensagens interativa diretamente do Node.js (HTML embutido em `server.js`). A interface inclui um campo de entrada, uma barra de informações mostrando o nome do pod e o tempo de atividade, e polling automático a cada 3 segundos com smart diffing (apenas os timestamps são atualizados se as mensagens não mudaram, sem cintilação).
+
+[quote]
+____
+*demo de atualização ao vivo* – Altere a constante `ACCENT_COLOR` na linha 9, salve. Em ~2 segundos, a cor da parede muda sem perder mensagens. Essa é a atualização ao vivo do Tilt em ação.
+____
+
+[#_6_4_the_dockerfile]
+=== 6.4 O Dockerfile
+
+[,dockerfile]
+----
+FROM dp.apps.rancher.io/containers/nodejs:24-dev
+WORKDIR /app
+COPY package.json ./
+RUN npm install --no-package-lock
+COPY . .
+EXPOSE 3000
+CMD ["node", "src/server.js"]
+----
+
+[quote]
+____
+Em produção, você usaria uma construção de múltiplas etapas para separar a etapa `npm install` (imagem de desenvolvimento com npm) da imagem final (imagem `nodejs:24` mínima, sem npm ou ferramentas de construção). Aqui mantemos um Dockerfile simples para a demonstração. Veja link:#89-minimal-images[Indo além: imagens mínimas].
+____
+
+[#_6_5_the_kubernetes_manifests]
+=== 6.5 Os manifests do Kubernetes
+
+*k8s/deployment.yaml:*
+
+[,yaml]
+----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: message-wall
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: message-wall
+  template:
+    metadata:
+      labels:
+        app: message-wall
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "3000"
+        prometheus.io/path: "/metrics"
+    spec:
+      containers:
+        - name: message-wall
+          image: message-wall           # Tilt replaces with local image
+          ports:
+            - containerPort: 3000
+          env:
+            - name: DB_HOST
+              value: "demo-db-postgresql"
+            - name: DB_PORT
+              value: "5432"
+            - name: DB_USER
+              value: "demo"
+            - name: DB_PASSWORD
+              value: "demo"
+            - name: DB_NAME
+              value: "demo"
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 3000
+            initialDelaySeconds: 5
+----
+
+[quote]
+____
+*Anotações do Prometheus* – As três anotações sob `template.metadata.annotations` dizem ao Prometheus: "`scrape este pod, na porta 3000, no caminho `/metrics``". O servidor Prometheus, configurado por padrão para descoberta automática do Kubernetes, detecta automaticamente os pods anotados. Nenhuma configuração adicional do Prometheus é necessária.
+____
+
+[quote]
+____
+*Observe a indentação* – As anotações devem estar sob `template.metadata` (o modelo do pod), não sob o `metadata` do Deployment ou no nível `spec`. Este é um erro comum: se as anotações estiverem no nível errado, o Prometheus não encontrará seus pods.
+____
+
+*k8s/service.yaml:*
+
+[,yaml]
+----
+apiVersion: v1
+kind: Service
+metadata:
+  name: message-wall
+spec:
+  selector:
+    app: message-wall
+  ports:
+    - port: 3000
+      targetPort: 3000
+----
+
+[#_6_6_installing_postgresql_prometheus_and_grafana]
+=== 6.6 Instalando PostgreSQL, Prometheus e Grafana
+
+Todos os três são serviços de infraestrutura – instale-os uma vez via Rancher Desktop, não em cada `tilt up`. Eles persistem entre as sessões de desenvolvimento.
+
+O repositório inclui arquivos de valores do Helm em `values_yaml/` para cada serviço. Na aba Coleção do Aplicativo Rancher Desktop, pesquise por cada gráfico, mude para o modo YAML e cole o arquivo correspondente.
+
+*values_yaml/postgresql.yaml:*
+
+[,yaml]
+----
+auth:
+  database: demo
+  postgresPassword: demo
+  postgresUsername: demo
+  username: demo
+global:
+  imagePullSecrets:
+  - application-collection
+----
+
+*values_yaml/prometheus.yaml:*
+
+[,yaml]
+----
+alertmanager:
+  service:
+    type: NodePort
+global:
+  imagePullSecrets:
+  - application-collection
+----
+
+*values_yaml/grafana.yaml:*
+
+[,yaml]
+----
+adminPassword: admin
+global:
+  imagePullSecrets:
+  - application-collection
+sidecar:
+  dashboards:
+    enabled: true
+  datasources:
+    enabled: true
+----
+
+[quote]
+____
+*`imagePullSecrets`* – Cada arquivo de valores referencia o segredo `application-collection` para que os pods possam puxar imagens de `dp.apps.rancher.io`. Esse segredo é criado automaticamente pela extensão do Rancher Desktop.
+____
+
+[quote]
+____
+*sidecars do Grafana* – As configurações `sidecar.dashboards.enabled` e `sidecar.datasources.enabled` são críticas. Eles iniciam pequenos contêineres ao lado do Grafana que monitoram ConfigMaps do Kubernetes com certos rótulos e carregam automaticamente seu conteúdo no Grafana. Não é necessário configurar manualmente fontes de dados ou importar painéis.
+____
+
+|===
+| Sidecar | Rótulo monitorado | Efeito
+
+| `grafana-sc-dashboard`
+| `grafana_dashboard: "1"`
+| Carrega automaticamente arquivos JSON de painel
+
+| `grafana-sc-datasources`
+| `grafana_datasource: "1"`
+| Configura automaticamente fontes de dados
+|===
+
+*Verifique se os sidecars estão ativos:*
+
+[,bash]
+----
+kubectl get pods -l app.kubernetes.io/name=grafana \
+  -o jsonpath='{.items[0].spec.containers[*].name}'
+# Expected: grafana grafana-sc-dashboard grafana-sc-datasources
+----
+
+Se você só vê `grafana`, volte para a interface do usuário do Rancher Desktop e verifique se tanto `sidecar.dashboards.enabled` quanto `sidecar.datasources.enabled` estão `true`, então *Fazer upgrade* do gráfico.
+
+[quote]
+____
+O gráfico do Helm para PostgreSQL cria automaticamente o usuário, o banco de dados e um serviço chamado `<release-name>-postgresql`. O Tiltfile detecta automaticamente esse serviço via o rótulo `app.kubernetes.io/name=postgresql` – não é necessário lembrar o nome da release.
+____
+
+[#_6_7_keycloak_authentication_without_a_helm_chart]
+=== 6.7 Keycloak: autenticação sem um gráfico do Helm
+
+O Keycloak fornece autenticação OAuth2 / OpenID Connect para a parede de mensagens. Os usuários fazem login, e a aplicação verifica o token de identidade deles antes de permitir que publiquem ou excluam mensagens.
+
+*Por que não instalar o Helm?* – Ao contrário do PostgreSQL, Prometheus e Grafana, não há um chart Helm para o Keycloak na SUSE Application Collection. Está disponível apenas como uma imagem de contêiner (`dp.apps.rancher.io/containers/keycloak`). Este é um cenário realista: nem toda aplicação fornece um chart Helm, e os desenvolvedores precisam saber como implantar manifests Kubernetes brutos.
+
+*k8s/appco/keycloak.yaml* (simplificado):
+
+[,yaml]
+----
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: keycloak-appco
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: keycloak
+  template:
+    metadata:
+      labels:
+        app: keycloak
+    spec:
+      volumes:
+        - name: realm-config
+          configMap:
+            name: keycloak-realm
+      containers:
+        - name: keycloak
+          image: dp.apps.rancher.io/containers/keycloak:26.5.4
+          args: ["start-dev", "--health-enabled=true", "--import-realm"]
+          volumeMounts:
+            - name: realm-config
+              mountPath: /opt/keycloak/data/import
+          env:
+            - name: KC_DB
+              value: postgres
+            - name: KC_DB_URL
+              value: jdbc:postgresql://PLACEHOLDER_PG_SVC:5432/keycloak
+            # ... KC_DB_USERNAME, KC_DB_PASSWORD, KEYCLOAK_ADMIN, etc.
+          readinessProbe:
+            httpGet:
+              path: /health/ready
+              port: 9000
+            initialDelaySeconds: 30
+      imagePullSecrets:
+        - name: application-collection
+----
+
+[quote]
+____
+*Pontos principais:*
+
+- *`start-dev` + `--import-realm`* – O Keycloak inicia em modo de desenvolvimento (HTTP, sem certificado) e importa automaticamente quaisquer arquivos de domínio JSON encontrados em `/opt/keycloak/data/import`.
+- *ConfigMap do Domínio* – Um ConfigMap (`keycloak-realm`) contendo o JSON do domínio é montado como um volume. Este ConfigMap é criado pelo Tiltfile a partir de `k8s/shared/keycloak-realm.json`.
+- *`PLACEHOLDER_PG_SVC`* – O Tiltfile substitui isso no momento da implantação pelo nome real do serviço PostgreSQL descoberto via seletores de rótulos.
+- *Banco de dados separado* – O Keycloak usa um banco de dados `keycloak` dedicado na mesma instância do PostgreSQL. O Tiltfile o cria automaticamente se não existir.
+____
+
+*Script de configuração do domínio (`scripts/setup-keycloak-realm.sh`):*
+
+O Tiltfile também executa um script de configuração via a API REST Admin como uma alternativa. O script é idempotente: ele verifica se o domínio já existe, obtém um token de administrador e cria o domínio se necessário. Isso lida com o caso em que a importação do ConfigMap não é reconhecida (por exemplo, o Keycloak já estava em execução antes do ConfigMap ser criado).
+
+[#_6_8_the_grafana_dashboard_auto_provisioned_configmap]
+=== 6.8 O painel do Grafana (ConfigMap auto-provisionado)
+
+O painel do Grafana é definido em um ConfigMap do Kubernetes. Graças ao sidecar habilitado na etapa anterior, ele carrega automaticamente – zero importação manual.
+
+*k8s/grafana-dashboard.yaml* (estrutura – o arquivo completo está no repositório):
+
+[,yaml]
+----
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: message-wall-dashboard
+  labels:
+    grafana_dashboard: "1"      # the sidecar detects this label
+data:
+  message-wall.json: |
+    {
+      "uid": "message-wall",
+      "title": "Message Wall",
+      "panels": [ ... ]
+    }
+----
+
+[quote]
+____
+*`uid: "prometheus"`* – Cada painel referencia a fonte de dados por `"uid": "prometheus"`. Este uid deve *corresponder exatamente* ao declarado no ConfigMap da fonte de dados gerado pelo Tiltfile (veja a próxima seção). Se o JSON usar `$\{DS_PROMETHEUS}` (sintaxe de importação da UI do Grafana), o sidecar *não* resolverá essa variável – você deve usar o uid codificado.
+____
+
+O painel contém 8 painéis:
+
+|===
+| Painel | Tipo | Métrica | O que ele mostra
+
+| Mensagens no banco de dados
+| Estatística
+| `app_messages_count`
+| Medidor com limites verde < 50 < amarelo < 100 < vermelho
+
+| Mensagens postadas
+| Estatística
+| `app_messages_posted_total`
+| Contador total de mensagens postadas
+
+| Exclusões em massa
+| Estatística
+| `app_messages_deleted_total`
+| Contador total de exclusões em massa
+
+| Requisições / seg
+| Série temporal
+| `rate(app_http_..._count[5m])`
+| Taxa de transferência por rota HTTP
+
+| Postagens / min
+| Série temporal
+| `rate(app_messages_posted_total[5m]) * 60`
+| Taxa de publicação
+
+| Tempo de resposta (p95)
+| Série temporal
+| `histogram_quantile(0.95, ...)`
+| Latência do 95º percentil por rota
+
+| Uso da memória
+| Série temporal
+| `process_resident_memory_bytes`
+| RSS + heap do Node.js
+
+| Atraso no loop de eventos (p99)
+| Série temporal
+| `nodejs_eventloop_lag_p99_seconds`
+| Saúde do loop de eventos
+|===
+
+[quote]
+____
+*Por que `rate(...[5m])` e não `[1m]`?* – A função `rate()` precisa de pelo menos 2 pontos de dados dentro da janela. Se o Prometheus coleta a cada 60 segundos, uma janela de 1 minuto tem apenas um ponto e não retorna nada. A regra geral: defina a janela `rate()` para pelo menos *2x o intervalo de coleta*. 5 minutos é um padrão seguro.
+____
+
+[quote]
+____
+*Provisionamento declarativo* – O painel está no Git, versionado com o código. Se você modificá-lo no Grafana (adicionando painéis, alterando consultas), exporte-o e atualize o ConfigMap para que as alterações não sejam perdidas na próxima reimplantação. Esta é a abordagem *Infraestrutura como Código* aplicada à observabilidade.
+____
+
+[#_6_9_the_complete_tiltfile]
+=== 6.9 O Tiltfile completo
+
+[,python]
+----
+# Demo Tiltfile
+load('ext://restart_process', 'docker_build_with_restart')
+
+allow_k8s_contexts('rancher-desktop')
+
+# --- Helpers ---------------------------------------------------------
+def find_service(label_selector, required=False, name='Service'):
+    # Discover a Kubernetes service by label selector.
+    #
+    # Helm charts installed via Rancher Desktop get random release
+    # names (e.g. postgresql-1772033328). Searching by label is
+    # robust regardless of the release name.
+    svc = str(local(
+        "kubectl get svc -l " + label_selector +
+        " -o jsonpath='{.items[0].metadata.name}'",
+        quiet=True,
+    )).strip()
+    if required and svc == '':
+        fail(name + ' not found. Install it via Rancher Desktop ' +
+             '(Application Collection).')
+    return svc
+
+# --- Service discovery -----------------------------------------------
+pg_svc = find_service(
+    'app.kubernetes.io/name=postgresql',
+    required=True,
+    name='PostgreSQL',
+)
+grafana_svc = find_service('app.kubernetes.io/name=grafana')
+prometheus_svc = find_service(
+    'app.kubernetes.io/name=prometheus,app.kubernetes.io/component=server',
+)
+
+# --- Application -----------------------------------------------------
+docker_build_with_restart(
+    'message-wall',
+    '.',
+    entrypoint=['node', 'src/server.js'],
+    only=['src/', 'package.json'],
+    live_update=[
+        sync('./src', '/app/src'),
+        run('cd /app && npm install --no-package-lock',
+            trigger=['package.json']),
+    ],
+)
+
+deployment = str(read_file('k8s/appco/deployment.yaml')).replace(
+    'PLACEHOLDER_PG_SVC', pg_svc)
+service = str(read_file('k8s/appco/service.yaml'))
+k8s_yaml([blob(deployment), blob(service), 'k8s/shared/grafana-dashboard.yaml'])
+
+k8s_resource(
+    'message-wall-appco',
+    port_forwards='3000:3000',
+    labels=['app'],
+)
+
+# --- Keycloak (no Helm chart — deployed as raw K8s manifest) ---------
+# Ensure keycloak DB exists in PostgreSQL
+pg_pod = str(local(
+    "kubectl get pods -l app.kubernetes.io/name=postgresql "
+    "-o jsonpath='{.items[0].metadata.name}'", quiet=True)).strip()
+local("kubectl exec " + pg_pod +
+    " -- env PGPASSWORD=demo psql -U demo -tc "
+    "\"SELECT 1 FROM pg_database WHERE datname='keycloak'\""
+    " | grep -q 1 || kubectl exec " + pg_pod +
+    " -- env PGPASSWORD=demo psql -U demo -c 'CREATE DATABASE keycloak'",
+    quiet=True)
+
+# Realm ConfigMap (auto-imports realm with demo user + OAuth client)
+local('kubectl create configmap keycloak-realm '
+      '--from-file=message-wall.json=k8s/shared/keycloak-realm.json '
+      '--dry-run=client -o yaml | kubectl apply -f -', quiet=True)
+
+# Deploy Keycloak using the Application Collection container image
+keycloak_yaml = str(read_file('k8s/appco/keycloak.yaml')).replace(
+    'PLACEHOLDER_PG_SVC', pg_svc)
+k8s_yaml(blob(keycloak_yaml))
+
+k8s_resource('keycloak-appco', port_forwards='8080:8080', labels=['app'])
+
+# Realm setup via Admin REST API (idempotent fallback)
+local_resource(
+    'keycloak-realm-setup',
+    cmd='bash scripts/setup-keycloak-realm.sh http://localhost:8080 '
+        'k8s/shared/keycloak-realm.json',
+    labels=['app'],
+    resource_deps=['keycloak-appco'],
+)
+
+# --- Monitoring (optional) -------------------------------------------
+if grafana_svc:
+    local_resource(
+        'grafana',
+        serve_cmd='kubectl port-forward svc/' + grafana_svc + ' 3001:80',
+        labels=['monitoring'],
+        allow_parallel=True,
+        links=['http://localhost:3001',
+               'http://localhost:3001/d/message-wall/'],
+    )
+
+if prometheus_svc:
+    local_resource(
+        'prometheus',
+        serve_cmd='kubectl port-forward svc/' + prometheus_svc
+                  + ' 9090:80',
+        labels=['monitoring'],
+        allow_parallel=True,
+        links=['http://localhost:9090'],
+    )
+
+    datasource_cm = """apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: grafana-datasource-prometheus
+  labels:
+    grafana_datasource: "1"
+data:
+  prometheus.yaml: |
+    apiVersion: 1
+    datasources:
+      - name: Prometheus
+        type: prometheus
+        uid: prometheus
+        url: http://{svc}:80
+        access: proxy
+        isDefault: true
+        editable: false
+""".format(svc=prometheus_svc)
+
+    k8s_yaml(blob(datasource_cm))
+
+    k8s_resource(
+        objects=['message-wall-dashboard:configmap',
+                 'grafana-datasource-prometheus:configmap'],
+        new_name='grafana-config',
+        labels=['monitoring'],
+        links=['http://localhost:3001/d/message-wall/'],
+    )
+----
+
+*Pontos-chave do Tiltfile:*
+
+*`find_service()` auxiliar* – Serviços instalados via a interface do Rancher Desktop têm nomes de versão aleatórios (por exemplo, `grafana-1772033328`). Em vez de codificar esses nomes, o auxiliar os descobre por meio de rótulos do Kubernetes definidos pelos gráficos do Helm. Este é um padrão robusto: o Tiltfile funciona independentemente do nome da versão.
+
+*`docker_build_with_restart`* – A extensão `restart_process` resolve um problema específico de linguagens interpretadas. Quando `live_update` sincroniza um arquivo no contêiner, o Node.js não o vê – o código já está carregado na memória. `docker_build_with_restart` envolve o ponto de entrada para reiniciar automaticamente o processo após cada sincronização. Para linguagens compiladas (Go, Rust), um padrão `docker_build` com uma etapa de compilação em `run()` é a abordagem usual.
+
+*Fonte de dados do Prometheus como ConfigMap* – Em vez de configurar o Prometheus na interface do Grafana (configuração manual perdida na reimplantação), o Tiltfile gera um ConfigMap com o rótulo `grafana_datasource: "1"`. O sidecar do Grafana o detecta e provisiona automaticamente a conexão. A URL do Prometheus é injetada dinamicamente: `\http://<detected-service-name>:80`.
+
+*`links`* – Cada `local_resource` e `k8s_resource` podem declarar links clicáveis no painel do Tilt. Você vê as URLs para Grafana, Prometheus e o painel específico diretamente na interface do Tilt.
+
+*`objects` + `new_name`* – ConfigMaps não são cargas de trabalho (Implantação, StatefulSet…), então o Tilt os classifica sob "`uncategorized`" por padrão. A diretiva `objects` os agrupa sob um nome explícito (`grafana-config`) com o rótulo `monitoring`.
+
+*Implantação do Keycloak* – Como não há chart do Helm para Keycloak na SUSE Application Collection, o Tiltfile o implanta como um manifesto K8s bruto. Primeiro, garante que um banco de dados `keycloak` exista no PostgreSQL, cria um ConfigMap com o JSON do domínio, implanta o Keycloak (substituindo `PLACEHOLDER_PG_SVC` pelo nome do serviço descoberto) e executa um script de configuração via API REST Admin como alternativa idempotente.
+
+*Condicionalidade* – O bloco de monitoramento é condicional (`if grafana_svc` / `if prometheus_svc`). Se Prometheus e Grafana não estiverem instalados, o Tiltfile ainda funciona – apenas o app e o PostgreSQL são necessários. Observabilidade é um bônus opcional.
+
+[#_6_10_running_the_demo]
+=== 6.10 Executando a demonstração
+
+[,bash]
+----
+# 1. Clone the repo
+git clone https://github.com/fxHouard/Rancher-Developer-Access-Demo.git
+cd Rancher-Developer-Access-Demo
+
+# 2. Install services via Rancher Desktop (one time only):
+#
+#    PostgreSQL:
+#      Application Collection tab -> search PostgreSQL -> Install
+#      Switch to YAML mode, paste values_yaml/postgresql.yaml, Install
+#
+#    Prometheus:
+#      Application Collection tab -> search Prometheus -> Install
+#      Switch to YAML mode, paste values_yaml/prometheus.yaml, Install
+#
+#    Grafana:
+#      Application Collection tab -> search Grafana -> Install
+#      Switch to YAML mode, paste values_yaml/grafana.yaml, Install
+
+# 3. Start the inner loop:
+tilt up
+
+# 4. Press Space to open the Tilt dashboard in your browser
+
+# 5. From the Tilt dashboard, click the links to:
+#    -> http://localhost:3000   -- The Message Wall app
+#    -> http://localhost:8080   -- Keycloak (admin / admin)
+#    -> http://localhost:9090   -- Prometheus (check targets)
+#    -> http://localhost:3001   -- Grafana (admin / admin)
+
+# 6. In Grafana: go to Dashboards -> "Message Wall" is already there
+#    (or click the direct link in Tilt)
+
+# 7. Post messages on localhost:3000 and watch the metrics
+#    update in real time in Grafana
+
+# 8. Change ACCENT_COLOR in src/server.js (line 9)
+#    -> save -> ~2 sec -> the color changes
+----
+
+[#_6_11_what_happens_under_the_hood]
+=== 6.11 O que acontece nos bastidores
+
+----
+1. `tilt up` on the host:
+   +-- Auto-detects PostgreSQL (label app.kubernetes.io/name=postgresql)
+   +-- Auto-detects Prometheus and Grafana (labels app.kubernetes.io/name=...)
+   +-- Creates keycloak DB in PostgreSQL if needed
+   +-- docker build message-wall -> image in dockerd local store
+   |   +-- k3s sees the image because same store -> imagePullPolicy: IfNotPresent
+   +-- kubectl apply deployment + service -> k3s creates the app pod
+   |   +-- Pod connects to detected PG service (K8s internal DNS)
+   |   +-- Prometheus scrapes the pod (prometheus.io/* annotations)
+   +-- Deploys Keycloak (Application Collection image, raw K8s manifest)
+   |   +-- Imports realm via ConfigMap volume mount
+   |   +-- Runs setup script via Admin REST API (idempotent fallback)
+   +-- kubectl apply ConfigMaps (datasource + dashboard)
+   |   +-- Grafana sidecars detect and load them
+   +-- Port-forward 3000 -> localhost:3000 (app)
+   +-- Port-forward 8080 -> Keycloak
+   +-- Port-forward 3001 -> Grafana
+   +-- Port-forward 9090 -> Prometheus
+
+2. Dev modifies src/server.js:
+   +-- Tilt (on host) detects the change (file watcher)
+   +-- live_update syncs ./src -> /app/src in the pod (kubectl cp)
+   +-- restart_process relaunches `node src/server.js` in the container
+   +-- ~2 seconds later: change visible on localhost:3000
+
+3. Observability loop (continuous):
+   +-- Prometheus scrapes localhost:3000/metrics every 15-60s
+   +-- Grafana queries Prometheus to display dashboards
+   +-- Dev sees the impact of their changes in real time
+----
+
+[#_6_12_port_forwarding_explained]
+=== 6.12 Explicação do encaminhamento de porta
+
+O Tilt gerencia o encaminhamento de porta automaticamente via `port_forwards` em `k8s_resource()`. É o equivalente a `kubectl port-forward`, mas integrado ao ciclo de vida do Tilt (reiniciado automaticamente se o pod for recriado).
+
+*Cadeia completa de encaminhamento de porta:*
+
+----
+Browser (localhost:3000)
+  -> Tilt port-forward
+    -> K8s Service (ClusterIP)
+      -> Your app pod (:3000)
+        -> Connects to PostgreSQL Service (:5432)
+          -> PostgreSQL pod
+----
+
+Seu app no pod usa DNS interno do Kubernetes para acessar o PostgreSQL:
+
+----
+postgresql://user:pass@demo-db-postgresql.default.svc.cluster.local:5432/mydb
+----
+
+Da sua máquina local (por exemplo, para um cliente SQL): `kubectl port-forward svc/demo-db-postgresql 5432:5432`.
+
+[#_7_the_complete_workflow]
+== 7. O fluxo de trabalho completo
+
+|===
+| # | Etapa | gerenciamento | Detalhes
+
+| 1
+| Escreva código
+| VS Code + extensões
+| Editor, autocompletar, lint, Git
+
+| 2
+| Iterar (loop interno)
+| Tilt
+| Auto-construção + sincronização ao vivo + painel de controle
+
+| 3
+| Autenticar
+| Keycloak
+| Login OAuth2, domínio provisionado automaticamente pelo Tilt
+
+| 4
+| Observar
+| Prometheus + Grafana
+| Métricas em tempo real, painéis provisionados automaticamente
+
+| 5
+| Commit + Push
+| Git
+| Fonte da verdade para GitOps
+
+| 6
+| Construir + Escanear (loop externo)
+| Pipeline CI + Trivy + Cosign
+| Vulnerabilidades + assinatura de imagem
+
+| 7
+| Implantar
+| Argo CD
+| Sincronização automática Git -> cluster
+
+| 8
+| Implantação progressiva
+| Argo Rollouts
+| Canary / Blue-green com análise
+|===
+
+[#_8_going_further]
+== 8. Avançando mais
+
+A demonstração acima cobre os essenciais do loop interno. Esta seção apresenta ferramentas e práticas adicionais que complementam o fluxo de trabalho à medida que seu projeto cresce.
+
+[#_8_1_dev_containers_the_reproducible_environment]
+=== 8.1 Contêineres de Desenvolvimento: o ambiente reproduzível
+
+O princípio: seu ambiente de desenvolvimento é definido *em código* (`.devcontainer/`). Todo desenvolvedor que abre o projeto obtém exatamente o mesmo ambiente, com as mesmas ferramentas, mesmas versões, mesmas extensões do VS Code.
+
+O Dev Container é um contêiner de desenvolvimento – ele serve *apenas para codificação*. Não precisa de Docker, kubectl ou Helm. Tilt roda no host.
+
+*`.devcontainer/Dockerfile`:*
+
+[,dockerfile]
+----
+FROM dp.apps.rancher.io/containers/nodejs:24-dev
+
+# System tools (available in the SLE_BCI repo)
+# gawk: required by VS Code Server (check-requirements.sh)
+RUN zypper --non-interactive install -y git openssh make gawk \
+    && zypper clean -a
+----
+
+*`.devcontainer/devcontainer.json`:*
+
+[,json]
+----
+{
+  "name": "Message Wall - Node.js",
+  "build": {
+    "dockerfile": "Dockerfile"
+  },
+  "customizations": {
+    "vscode": {
+      "extensions": [
+        "ms-kubernetes-tools.vscode-kubernetes-tools"
+      ],
+      "settings": {
+        "vs-kubernetes.disable-linters": true
+      }
+    }
+  },
+  "postCreateCommand": "if [ -f package.json ]; then npm install --no-package-lock; fi"
+}
+----
+
+[quote]
+____
+Sem `docker`, `kubectl`, `helm` ou `tilt` no contêiner de desenvolvimento. Tilt roda no host. A extensão do Kubernetes fornece IntelliSense para edição de manifestos do K8s. O `kubeconfig not found` aviso é esperado e inofensivo – o explorador de clusters não funcionará dentro do contêiner, mas a autocompletação funciona.
+____
+
+Quando o VS Code está conectado a um Dev Container, todos os seus terminais integrados abrem *dentro do contêiner*. Mas o Tilt deve rodar no host (onde estão o docker, kubectl e helm). Use um terminal separado (Terminal.app, iTerm2, Warp, Windows Terminal…) ou uma segunda janela do VS Code aberta na mesma pasta *sem* "`Reopen in Container`".
+
+[#_8_2_resource_requests_and_limits]
+=== 8.2 Solicitações e limites de recursos
+
+Na demonstração, a implantação não possui bloco `resources` por simplicidade. Em produção (ou clusters compartilhados), você deve sempre defini-los:
+
+[,yaml]
+----
+resources:
+  requests:
+    cpu: 100m           # 0.1 vCPU -- scheduler reserves this
+    memory: 128Mi       # 128 MB -- guaranteed minimum
+  limits:
+    cpu: 500m           # 0.5 vCPU -- ceiling, throttled beyond
+    memory: 256Mi       # 256 MB -- OOMKill beyond
+----
+
+Sem `requests` ou `limits`, um pod pode consumir todos os recursos do nó e impactar outras cargas de trabalho – o problema *"`noisy neighbor`"*. `requests` são para o agendador (colocação inteligente), `limits` protegem o nó (limitação de CPU, OOMKill se a memória exceder).
+
+[#_8_3_testcontainers_integration_tests]
+=== 8.3 Testcontainers: testes de integração
+
+*O conceito:* Testcontainers é uma biblioteca que cria contêineres Docker efêmeros em seus testes de integração. Precisa de um PostgreSQL para testar suas consultas SQL? Testcontainers inicia um, executa seus testes e o destrói quando termina.
+
+*Por que isso é importante:*
+
+* *Reproduzibilidade:* cada teste começa com um banco de dados novo – sem contaminação entre os testes.
+* *Sem mocks:* você testa contra o banco de dados real, não uma simulação que pode divergir.
+* *Compatível com CI:* funciona no GitHub Actions, GitLab CI, etc. (apenas precisa do Docker).
+
+O Testcontainers utiliza o daemon Docker do host. Com o Rancher Desktop (dockerd), funciona diretamente – sem configuração especial necessária.
+
+*Configuração:*
+
+[,bash]
+----
+# macOS / Linux -- already configured if ~/.rd/bin is in PATH
+export DOCKER_HOST=unix://$HOME/.rd/run/docker.sock
+----
+
+*Exemplo (Node.js):*
+
+[,javascript]
+----
+const { GenericContainer } = require('testcontainers');
+const { Client } = require('pg');
+
+describe('Database integration', () => {
+  let container, client;
+
+  beforeAll(async () => {
+    container = await new GenericContainer('dp.apps.rancher.io/containers/postgresql:17')
+      .withExposedPorts(5432)
+      .withEnvironment({ POSTGRES_USER: 'test', POSTGRES_PASSWORD: 'test', POSTGRES_DB: 'test' })
+      .start();
+
+    client = new Client({
+      host: container.getHost(),
+      port: container.getMappedPort(5432),
+      user: 'test', password: 'test', database: 'test',
+    });
+    await client.connect();
+  });
+
+  afterAll(async () => {
+    await client.end();
+    await container.stop();
+  });
+
+  test('should insert and retrieve data', async () => {
+    await client.query('CREATE TABLE test (id SERIAL, name TEXT)');
+    await client.query("INSERT INTO test (name) VALUES ('hello')");
+    const result = await client.query('SELECT * FROM test');
+    expect(result.rows).toHaveLength(1);
+  });
+});
+----
+
+*Testcontainers vs Tilt+Helm:*
+
+|===
+| | Testcontainers | Tilt + Helm
+
+| *Ciclo de vida*
+| Efêmero (1 execução de teste)
+| Persistente (duração da sessão de desenvolvimento)
+
+| *Dados*
+| Novo a cada execução
+| Persistente (a menos que seja excluído)
+
+| *Uso*
+| Testes de integração em CI
+| Desenvolvimento local diário
+|===
+
+[#_8_4_mirrord_local_debug_on_a_remote_cluster]
+=== 8.4 mirrord: depuração local em um cluster remoto
+
+O mirrord permite que você execute um processo local enquanto o conecta *à rede e ao sistema de arquivos de um pod em um cluster Kubernetes remoto*. O código é executado localmente, mas "`sees`" no ambiente do cluster.
+
+*Não é necessário o mirrord se* você tem um cluster local com todas as dependências e seu aplicativo possui de 1 a 5 microsserviços.
+
+*mirrord se torna interessante quando* o aplicativo tem mais de 20 microserviços (impossível executar tudo localmente), você precisa de serviços gerenciados não disponíveis localmente, ou deseja depuração local (pontos de interrupção no VS Code) com o contexto de um cluster real.
+
+[quote]
+____
+*A combinação vencedora* – Tilt para o loop interno diário (cluster local), mirrord para depuração ocasional em staging. As duas ferramentas são complementares.
+____
+
+[#_8_5_helm_and_kustomize]
+=== 8.5 Helm e Kustomize
+
+*Helm* permite que você modele seus manifests do Kubernetes e os distribua como "`charts`". É o equivalente a um gerenciador de pacotes (npm, zypper…) para Kubernetes. `values.yaml` personaliza implantações por ambiente (dev, staging, prod). Helm rastreia versões implantadas e permite rollback.
+
+*Kustomize* funciona sobrepondo *patches* em manifests YAML base. Sem linguagem de template: você aplica transformações declarativas. Integrado nativamente ao kubectl (`kubectl apply -k`).
+
+[quote]
+____
+*Helm ou Kustomize?* – As duas não são mutuamente exclusivas. Uma abordagem comum: use Helm para charts externos (bancos de dados, monitoramento) e Kustomize para personalizar seus próprios manifests por ambiente.
+____
+
+[#_8_6_security_trivy_and_cosign]
+=== 8.6 Segurança: Trivy e Cosign
+
+*Trivy* (disponível na Coleção de Aplicativos) escaneia suas imagens de contêiner, arquivos do Kubernetes, dependências e código IaC para detectar vulnerabilidades conhecidas (CVEs), configurações incorretas e segredos expostos.
+
+[,bash]
+----
+trivy image dp.apps.rancher.io/containers/nodejs:24
+trivy k8s --report summary cluster
+----
+
+*Cosign* (disponível na Coleção de Aplicativos) permite que você assine criptograficamente suas imagens de contêiner. É um pilar da *segurança da cadeia de suprimento*.
+
+[,bash]
+----
+cosign sign --key cosign.key myregistry/myapp:v1.0
+cosign verify --key cosign.pub myregistry/myapp:v1.0
+----
+
+[#_8_7_gitops_argo_cd_and_argo_rollouts]
+=== 8.7 GitOps: Argo CD e Argo Rollouts
+
+*GitOps* é o princípio de que *Git é a única fonte de verdade* para o estado desejado de sua infraestrutura e aplicações. Uma ferramenta de implantação observa o repositório Git e reconcilia automaticamente o estado do cluster com o estado declarado no Git.
+
+*Argo CD* (disponível na Coleção de Aplicativos) é uma ferramenta de implantação contínua declarativa para Kubernetes: estado declarativo no Git, auto-sincronização com detecção de desvio, suporte a múltiplos clusters e uma interface web para visualização.
+
+*Argo Rollouts* (também na Coleção de Aplicativos) adiciona estratégias de implantação *blue-green* e *canary* ao Kubernetes, com análise automática de métricas para decidir se deve promover ou rollback uma implantação.
+
+[#_8_8_the_12_factor_app_for_kubernetes]
+=== 8.8 O "`12 Factor App`" para Kubernetes
+
+* *Configuração via ambiente:* use ConfigMaps e Secrets, nunca codifique configurações diretamente na imagem.
+* *Processos sem estado:* cada instância do seu aplicativo deve ser idêntica e substituível.
+* *Vinculação de porta:* seu aplicativo expõe uma porta, o Kubernetes gerencia o roteamento via Services.
+* *Logs para stdout:* nunca escreva em arquivos de log. Deixe o Kubernetes / Fluent Bit coletar stdout.
+* *Verificações de saúde:* sempre implemente sondas de liveness e readiness.
+* *Métricas:* exponha um `/metrics` endpoint do Prometheus. Observabilidade não é um luxo, é um padrão.
+
+[#_8_9_minimal_images]
+=== 8.9 Imagens mínimas
+
+* *BCI Micro:* para binários estáticos (Go, Rust). Sem gerenciador de pacotes, superfície de ataque mínima.
+* *BCI BusyBox:* para casos que requerem um shell mínimo.
+* *BCI Base:* para casos que requerem zypper/RPM.
+* Construções de múltiplas etapas: construa com a imagem de desenvolvimento, copie o resultado para o BCI Micro.
+
+[#_8_10_infrastructure_as_code]
+=== 8.10 Infraestrutura como Código
+
+* Tudo está no Git: Dockerfiles, Helm charts, sobreposições do Kustomize, Tiltfiles, devcontainer.json, *painéis do Grafana*.
+* Nenhum manual `kubectl apply` em staging/prod. Tudo passa pelo GitOps (Argo CD).
+* Ambientes efêmeros (ambientes de pré-visualização) são criados automaticamente em cada PR.
+
+[#_9_glossary]
+== 9. Glossário
+
+|===
+| Termo | Definição
+
+| *Loop Interno*
+| Ciclo de desenvolvimento local rápido: codificar, construir, implantar, testar
+
+| *Loop Externo*
+| Ciclo automatizado pós-commit: CI/CD, testes, implantação
+
+| *Tilt*
+| Ferramenta de loop interno com live_update e painel da web
+
+| *Tiltfile*
+| Arquivo de configuração do Tilt em Starlark (DSL semelhante ao Python)
+
+| *live_update*
+| Recurso do Tilt: sincronização de arquivos em um contêiner sem reconstrução
+
+| *restart_process*
+| Extensão do Tilt: reinicia o processo do aplicativo após um live_update
+
+| *Contêineres de Desenvolvimento*
+| Especificação aberta para definir um ambiente de desenvolvimento em um contêiner
+
+| *mirrord*
+| Conecta um processo local a um contexto remoto de cluster K8s
+
+| *Testcontainers*
+| Biblioteca para dependências conteinerizadas em testes.
+
+| *Helm*
+| Gerenciador de pacotes para Kubernetes (charts).
+
+| *Kustomize*
+| Customização de manifests do K8s via patches/overlays.
+
+| *Trivy*
+| Scanner de vulnerabilidades para imagens, código, IaC
+
+| *Cosign*
+| Ferramenta de assinatura/verificação de imagens de contêiner
+
+| *Argo CD*
+| Ferramenta de implantação contínua GitOps para Kubernetes
+
+| *Argo Rollouts*
+| Implantações Canary e blue-green para Kubernetes
+
+| *GitOps*
+| Paradigma: Git = fonte da verdade para o estado do cluster
+
+| *Keycloak*
+| Gerenciamento de identidade e acesso de código aberto (OAuth2 / OpenID Connect)
+
+| *Prometheus*
+| Sistema de monitoramento que coleta métricas via scraping HTTP
+
+| *Grafana*
+| Plataforma de visualização de métricas (painéis)
+
+| *prom-client*
+| Biblioteca Node.js para expor métricas do Prometheus
+
+| *Sidecar*
+| Contêiner auxiliar em um pod, executando uma tarefa complementar
+
+| *ConfigMap*
+| Recurso K8s para armazenar configuração (aqui: painéis, fontes de dados)
+
+| *k3s*
+| Distribuição leve do Kubernetes usada pelo Rancher Desktop
+
+| *BCI*
+| Imagens de Contêiner Base da SUSE, base das imagens da Coleção de Aplicativos
+
+| *OCI*
+| Iniciativa de Contêineres Abertos: padrão para imagens de contêiner
+
+| *imagePullPolicy*
+| Política K8s: `IfNotPresent` = usar imagem local se disponível
+|===
+
+[#_10_further_reading]
+== 10. Leitura recomendada
+
+* *Rancher Desktop:* https://rancherdesktop.io[rancherdesktop.io]
+* *SUSE Application Collection:* https://apps.suse.com[apps.suse.com]
+* *Código-fonte de demonstração:* https://github.com/fxHouard/Rancher-Developer-Access-Demo[github.com/fxHouard/Rancher-Developer-Access-Demo]
+* *Tilt:* https://tilt.dev[tilt.dev] – e o post do blog https://blog.tilt.dev/2021/09/07/rancher-desktop.html[Tilt + Rancher Desktop]
+* *mirrord:* https://mirrord.dev[mirrord.dev]
+* *Testcontainers:* https://testcontainers.com[testcontainers.com]
+* *Especificação de Contêineres de Desenvolvimento:* https://containers.dev[containers.dev]
+* *Argo CD:* https://argoproj.github.io/cd[argoproj.github.io/cd]
+* *Helm:* https://helm.sh[helm.sh]
+* *Trivy:* https://aquasecurity.github.io/trivy[aquasecurity.github.io/trivy]
+* *Cosign:* https://docs.sigstore.dev/cosign[docs.sigstore.dev/cosign]
+* *Keycloak:* https://www.keycloak.org[keycloak.org]
+* *Prometheus:* https://prometheus.io[prometheus.io]
+* *Grafana:* https://grafana.com[grafana.com]
+* *prom-client (Node.js):* https://github.com/siimon/prom-client[github.com/siimon/prom-client]
+
+_Feliz desenvolvimento com Kubernetes!_

@@ -1,0 +1,144 @@
+= Guide d'intégration et de mise en œuvre
+:page-languages: [en]
+:revdate: 2026-03-09
+:page-revdate: {revdate}
+
+Les développeurs se tournent vers `docker pull`. C'est rapide, ça fonctionne, et la question de sécurité peut attendre. Les équipes opérationnelles se tournent vers `helm install` avec un contenu vérifié provenant de registres de confiance — car déployer en toute sécurité sur Kubernetes est leur travail. Entre ces deux flux de travail se trouve un écart qui génère des frictions, une dette de sécurité et des surprises de dernière minute.
+
+L'accès développeur SUSE Rancher comble cet écart. Il intègre Kubernetes et un contenu de confiance directement dans l'environnement local du développeur, avec un minimum de surcharge cognitive. La grappe locale est alimentée par Rancher Desktop et son moteur K3s, une distribution Kubernetes légère et de qualité production qui sert également de moteur intégré dans RKE2. Dès la première ligne de code, le développement local s'exécute sur le même composant d'exécution et le même contenu que la production.
+
+[#_1_subscription_activation]
+== 1. Activation de l'abonnement
+
+L'activation de votre abonnement SUSE Rancher Developer Access est requise avant que vous puissiez accéder au registre OCI de confiance à dp.apps.rancher.io.
+
+[#_1_1_activating_your_subscription]
+=== 1.1. Activation de votre abonnement
+
+Après l'achat d'un abonnement ou le début d'un essai gratuit, votre contact principal recevra un e-mail de confirmation contenant un code d'enregistrement de 14 caractères.
+
+[#_procedure_activating_your_access]
+==== Procédure : Activation de votre accès
+
+. Connectez-vous au https://scc.suse.com/[SUSE Customer Center].
+. Dans la barre latérale, accédez à *Mes outils* et sélectionnez *Activer les abonnements*.
+. Entrez votre *code d'enregistrement* dans le champ prévu à cet effet.
+. Associez l'abonnement à votre organisation et cliquez sur *Activer*.
+. Une fois terminé, vérifiez que *SUSE Rancher Developer Access* apparaît comme actif sous l'onglet *Abonnements*.
+
+[#_1_2_user_accounts_and_access_tokens]
+=== 1.2. Comptes utilisateurs et jetons d'accès
+
+L'accès développeur SUSE Rancher est attribué à des comptes utilisateurs individuels.
+
+* *Étendue*{nbsp}: Ces comptes sont strictement réservés au développement, aux tests et à la création de prototypes. Ils ne sont pas autorisés pour des charges de travail en production. Pour les exigences de production, contactez l'équipe commerciale de SUSE ou consultez la documentation de SUSE Rancher Prime.
+* *Jetons d'accès*{nbsp}: L'authentification au registre est gérée via des jetons d'accès. Vous pouvez créer plusieurs jetons pour différents environnements (par exemple, un poste de travail local et un environnement de développement distant), mais tous les jetons sont liés à votre compte utilisateur autorisé unique.
+* *Comptes de service*{nbsp}: Ce niveau d'abonnement n'inclut pas les comptes de service, qui sont nécessaires pour des outils automatisés tels que les pipelines CI/CD. Si votre flux de travail nécessite de l'automatisation, contactez SUSE pour des détails sur Rancher Prime.
+
+[#_procedure_generating_a_token]
+==== Procédure : Génération d'un jeton
+
+. Connectez-vous à `apps.rancher.io` en utilisant vos identifiants SCC.
+. Accédez à la section *Jetons d'accès* de votre profil.
+. Cliquez sur *Créer*, fournissez une description et copiez le jeton immédiatement. Il ne sera plus affiché.
+
+[#_2_local_environment_rancher_desktop]
+== 2. Environnement local{nbsp}: Rancher Desktop
+
+Rancher Desktop fournit une grappe Kubernetes locale et un moteur de conteneur. C'est une application indépendante, et celle que ce guide utilise pour exécuter du contenu de confiance depuis SUSE Rancher Developer Access.
+
+[#_2_1_container_engine_selection]
+=== 2.1. Sélection du moteur de conteneur
+
+Lors de la configuration, vous devez sélectionner un moteur de conteneur. Quel que soit votre choix, le comportement de vos applications et du cluster Kubernetes reste identique, ce qui fait des deux options une base solide pour la parité en production. K3s, le moteur alimentant le cluster local, est une distribution Kubernetes légère de niveau production et le moteur intégré au cœur de RKE2. Le cluster que vous exécutez localement se comporte de la même manière que toute distribution Kubernetes basée sur containerd en production.
+
+Le choix du moteur de conteneur affecte la manière dont vous interagissez avec l'environnement local, et non le fonctionnement du cluster lui-même{nbsp}:
+
+* *Moby (Docker Engine)*{nbsp}: C'est le choix suggéré pour la plupart des développeurs. Il offre une compatibilité maximale avec des outils tiers populaires tels que Tilt, Dev Containers et Testcontainers.
+* *containerd (nerdctl)*{nbsp}: Cette option est destinée aux utilisateurs qui souhaitent interagir avec le cluster local en utilisant les mêmes modèles qu'un administrateur de cluster, en utilisant la CLI nerdctl.
+
+[#_3_the_suse_application_collection_ui_extension_for_rancher_desktop]
+== 3. L'extension UI de la collection d'applications SUSE pour Rancher Desktop
+
+L'*extension UI de la collection d'applications SUSE pour Rancher Desktop* automatise l'authentification au registre, crée le secret de tirage Kubernetes requis et fournit une interface graphique pour parcourir, installer et configurer des applications de la collection d'applications SUSE.^[1]^
+
+[#_3_1_installing_and_configuring_the_extension]
+=== 3.1. Installation et configuration de l'extension
+
+. Installez l'extension via l'onglet Extensions dans Rancher Desktop.
+. Ouvrez l'extension et allez dans Paramètres.
+. Entrez votre nom d'utilisateur SCC et le jeton d'accès généré dans la section 1.2.
+. Cliquez sur Enregistrer les identifiants.
+
+Une fois configurée, l'extension effectue automatiquement les opérations suivantes{nbsp}:
+
+* *Connexion au registre*{nbsp}: Se connecte à `dp.apps.rancher.io` pour votre moteur de conteneur sélectionné, permettant des tirages d'images authentifiés depuis la CLI.
+* *Injection de secret de tirage*{nbsp}: Crée un imagePullSecret Kubernetes nommé `application-collection` dans votre espace de noms par défaut. Un imagePullSecret stocke les informations d'identification du registre en tant qu'objet Kubernetes, permettant au cluster de tirer des images depuis des registres authentifiés sans configuration manuelle.
+* *Configuration Helm*{nbsp}: Configure le client Helm local pour résoudre le dépôt OCI de confiance.
+
+Tous les charts Helm dans la collection d'applications SUSE exposent un paramètre global standard imagePullSecrets. Lors de l'installation manuelle d'un chart, définissez ce paramètre sur [application-collection] pour garantir que toutes les dépendances du chart sont tirées en utilisant les bonnes informations d'identification.
+
+[NOTE]
+====
+L'extension UI fournit actuellement une interface pour les applications disponibles sous forme de charts Helm. Votre abonnement vous donne également accès à une vaste bibliothèque d'images de conteneurs autonomes (images de base, piles de langages, outils CLI, et plus) qui ne sont pas encore affichées dans l'extension. Visitez https://apps.rancher.io/[apps.rancher.io] pour explorer le catalogue complet.
+====
+
+[^1] : L'extension est également compatible avec Docker Desktop.
+
+[#_4_why_trusted_content_matters]
+== 4. Pourquoi le contenu de confiance est important
+
+Les images de conteneurs publiques ne sont pas maintenues avec l'exposition CVE comme priorité. Utiliser la Collection d'applications SUSE à la place peut réduire le nombre total de vulnérabilités d'un projet full-stack de plusieurs milliers à moins de 50.
+
+[#_4_1_language_stacks_and_base_images]
+=== 4.1. Piles de langages et images de base
+
+Des conteneurs de langages ou de base non vérifiés peuvent introduire des milliers de vulnérabilités dans votre projet avant même que vous ayez écrit une seule ligne de code. Les images populaires des registres publics sont construites pour la commodité, pas pour la sécurité. Elles ne sont pas systématiquement maintenues pour minimiser l'exposition aux CVE. Les piles de langages de la SUSE Application Collection sont construites sur SLE BCI, une couche de base minimale que SUSE maintient et corrige activement. Les vulnérabilités héritées sont considérablement réduites dans tous les composants d'exécution pris en charge, y compris Node.js, Go, OpenJDK et bien d'autres.
+4.2. Applications et Middleware
+Il en va de même pour les applications dont dépend votre pile. Une image de middleware largement utilisée provenant d'un registre public peut facilement contenir des centaines de CVE, non pas parce que le logiciel lui-même est peu sûr, mais parce que l'image est construite sur une large couche de base et est rarement maintenue pour suivre les mises à jour de dépendances. Les images de la SUSE Application Collection utilisent des dépendances minimales et soigneusement sélectionnées et sont activement corrigées — une approche différente de la composition d'images, pas de correction différée — ce qui réduit systématiquement le nombre de vulnérabilités à une fraction de ce que portent les homologues publics.
+
+[#_5_example_developer_workflow_fast_iteration_inner_loop]
+== 5. Exemple de flux de travail pour développeurs{nbsp}: Boucle interne d'itération rapide
+
+[#_5_1_live_development_with_tilt_and_vs_code]
+=== 5.1. Développement en direct avec Tilt et VS Code
+
+Cette section présente un modèle basé sur *Tilt* et *VS Code*, deux outils tiers populaires, comme un exemple pratique parmi tant d'autres.
+
+L'objectif est une boucle interne serrée{nbsp}: vous modifiez le code localement, et le changement est immédiatement reflété dans un conteneur en cours d'exécution sur votre cluster Rancher Desktop local, sans reconstruction manuelle, sans envoi à un registre distant, sans redéploiement depuis le début.
+
+Rancher Desktop permet cela grâce à son *Local Image Store*. Lorsque Tilt construit une image, il la pousse directement dans le magasin utilisé par K3s, contournant complètement le registre distant. Un enregistrement de fichier dans VS Code déclenche une synchronisation Tilt, qui met à jour le conteneur en cours d'exécution en quelques secondes. L'application, construite sur des images de base de la SUSE Application Collection, se comporte exactement comme en production{nbsp}: même composant d'exécution containerd, même environnement Kubernetes.
+
+Les applications à état s'adaptent bien à ce modèle. Des dépendances telles que PostgreSQL ou un courtier de messages peuvent être déployées en tant que charts Helm de confiance dans le cluster local une fois, tandis que le conteneur de l'application est mis à jour en continu. L'ensemble de la pile fonctionne localement et sans dépendances externes.
+
+Pour un guide complet de configuration et une mise en œuvre de référence fonctionnelle, consultez le https://github.com/fxHouard/Rancher-Developer-Access-Demo[dépôt Rancher Developer Access Demo].
+
+[#_6_best_practices_and_tips]
+== 6. Meilleures pratiques et conseils
+
+[#_6_1_pin_versions_and_use_trusted_base_images]
+=== 6.1. Épingler les versions et utiliser des images de base de confiance
+
+La collection d'applications SUSE ne prend pas en charge la balise `:latest`. Épinglez toujours vos `Dockerfile` et vos charts Helm aux balises de version et de révision spécifiques trouvées sur https://apps.rancher.io/[apps.rancher.io]. Cela garantit que votre environnement reste reproductible et élimine les dérives de version entre le développement et la production.
+
+Utilisez toujours des images de base provenant du registre de confiance{nbsp}:
+
+[,console]
+----
+FROM dp.apps.rancher.io/containers/suse-bci-base:15.7
+----
+
+[#_6_2_tips_for_developers_new_to_kubernetes]
+=== 6.2. Conseils pour les développeurs nouveaux dans Kubernetes
+
+Kubernetes introduit des concepts qui n'ont pas d'équivalent direct dans un flux de travail uniquement Docker. Quelques ajustements facilitent la transition{nbsp}:
+
+* *Transfert de port via Ingress*{nbsp}: Utilisez l'interface utilisateur de transfert de port de Rancher Desktop pour exposer les services du cluster sur l'hôte local en un clic. Configurer un contrôleur Ingress pour le développement local est une surcharge inutile.
+* *Espaces de noms*{nbsp}: Le secret imagePullSecret créé par l'extension est injecté dans l'espace de noms `default`. Si vous déployez des charges de travail dans d'autres espaces de noms, vous devrez également créer le secret là-bas, ou configurer vos charts pour y faire référence explicitement.
+* *Journaux et état*{nbsp}: Utilisez `kubectl logs <pod>` et `kubectl describe pod <pod>` comme vos premiers outils de diagnostic. La plupart des problèmes lors du développement local (échecs de tirage d'image, boucles de plantage, variables d'environnement mal configurées) sont immédiatement visibles là-bas.
+* *Conscience du contexte*{nbsp}: Rancher Desktop s'enregistre comme un contexte kubectl. Si vous travaillez avec plusieurs clusters, vérifiez votre contexte actif avec `kubectl config current-context` avant d'exécuter des commandes.
+
+[#_conclusion]
+== Conclusion
+
+L'accès développeur SUSE Rancher offre aux équipes de développement le même composant d'exécution et le même contenu de confiance qui sera utilisé en production, disponible dès le premier jour d'un projet. En automatisant l'authentification du registre et en préconfigurant l'environnement local, cela élimine les frictions qui s'accumulent généralement entre le développement et le déploiement, sans exiger que les développeurs deviennent des experts en Kubernetes.
