@@ -1,6 +1,6 @@
 = Entwicklung für Kubernetes
 :page-languages: [en]
-:revdate: 2026-03-09
+:revdate: 2026-06-03
 :page-revdate: {revdate}
 
 *Rancher Desktop – SUSE Application Collection – Tilt*
@@ -1434,7 +1434,7 @@ cosign verify --key cosign.pub myregistry/myapp:v1.0
 == 10. Weiterführende Informationen
 
 * *Rancher Desktop:* https://rancherdesktop.io[rancherdesktop.io]
-* *SUSE Application Collection:* https://apps.suse.com[apps.suse.com]
+* *SUSE Application Collection:* https://apps.rancher.io/[apps.rancher.io/]
 * *Demo-Quellcode:* https://github.com/fxHouard/Rancher-Developer-Access-Demo[github.com/fxHouard/Rancher-Developer-Access-Demo]
 * *Tilt:* https://tilt.dev[tilt.dev] – und der Blogbeitrag https://blog.tilt.dev/2021/09/07/rancher-desktop.html[Tilt + Rancher Desktop]
 * *mirrord:* https://mirrord.dev[mirrord.dev]
