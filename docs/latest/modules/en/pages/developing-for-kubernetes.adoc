@@ -1433,7 +1433,7 @@ cosign verify --key cosign.pub myregistry/myapp:v1.0
 == 10. Further reading
 
 * *Rancher Desktop:* https://rancherdesktop.io[rancherdesktop.io]
-* *SUSE Application Collection:* https://apps.suse.com[apps.suse.com]
+* *SUSE Application Collection:* https://apps.rancher.io/[apps.rancher.io/]
 * *Demo source code:* https://github.com/fxHouard/Rancher-Developer-Access-Demo[github.com/fxHouard/Rancher-Developer-Access-Demo]
 * *Tilt:* https://tilt.dev[tilt.dev] – and the blog post https://blog.tilt.dev/2021/09/07/rancher-desktop.html[Tilt + Rancher Desktop]
 * *mirrord:* https://mirrord.dev[mirrord.dev]

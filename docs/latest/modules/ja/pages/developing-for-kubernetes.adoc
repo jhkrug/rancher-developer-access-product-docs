@@ -1433,7 +1433,7 @@ cosign verify --key cosign.pub myregistry/myapp:v1.0
 == 10.さらなる情報
 
 * *Rancher Desktop:* https://rancherdesktop.io[rancherdesktop.io]
-* *SUSE アプリケーションコレクション:* https://apps.suse.com[apps.suse.com]
+* *SUSE アプリケーションコレクション:* https://apps.rancher.io/[apps.rancher.io/]
 * *デモソースコード:* https://github.com/fxHouard/Rancher-Developer-Access-Demo[github.com/fxHouard/Rancher-Developer-Access-Demo]
 * *Tilt:* https://tilt.dev[tilt.dev] – そしてブログ記事 https://blog.tilt.dev/2021/09/07/rancher-desktop.html[Tilt + Rancher Desktop]
 * *mirrord:* https://mirrord.dev[mirrord.dev]
