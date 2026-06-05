@@ -1,5 +1,5 @@
 = 入门和实施指南
-:page-languages: [en]
+:page-languages: [en, de, es, fr, ja, pt, zh]
 :revdate: 2026-03-09
 :page-revdate: {revdate}
 
